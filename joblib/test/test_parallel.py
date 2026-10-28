@@ -2401,6 +2401,14 @@ def _test_windows_worker_sigint_repro_script():
         root = Path(sys.argv[1])
         pytest_pid = int(sys.argv[2])
 
+        # A launcher such as Git Bash can pass down the Win32 Ctrl+C-ignore
+        # attribute even though this process owns a new console.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.SetConsoleCtrlHandler.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        kernel32.SetConsoleCtrlHandler.restype = ctypes.c_int
+        if not kernel32.SetConsoleCtrlHandler(None, False):
+            raise ctypes.WinError(ctypes.get_last_error())
+
         def task(task_index):
             (root / f"started-{task_index}").write_text(
                 str(signal.getsignal(signal.SIGINT) is signal.SIG_IGN),
@@ -2421,7 +2429,6 @@ def _test_windows_worker_sigint_repro_script():
             else:
                 return
 
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel32.GetConsoleProcessList.argtypes = [
                 ctypes.POINTER(ctypes.c_ulong),
                 ctypes.c_ulong,
@@ -2686,17 +2693,16 @@ def test_windows_keyboardinterrupt_does_not_start_queued_loky_tasks(tmp_path):
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate(timeout=2)
-        isolation_path = run_dir / "isolation.json"
-        isolation_contents = (
-            isolation_path.read_text(encoding="utf-8")
-            if isolation_path.exists()
-            else None
-        )
+        markers = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in run_dir.iterdir()
+            if path.suffix != ".py"
+        }
         pytest.fail(
             "The isolated Windows Ctrl+C reproduction timed out; "
             f"taskkill exit={cleanup.returncode if cleanup else None}, "
             f"error={cleanup_error!r}, "
-            f"isolation={isolation_contents!r}"
+            f"markers={markers!r}"
         )
 
     assert process.returncode == 0, (stdout, stderr)
